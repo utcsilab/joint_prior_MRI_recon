@@ -1,1 +1,5 @@
 results/*
+*.pyc
+*.ipynb
+MC-MoDL/results/*
+data_pre_proc/*
