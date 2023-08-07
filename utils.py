@@ -13,6 +13,10 @@ import torch.nn as nn
 import numpy as np
 # import sigpy as sp
 
+def nrmse_np(x,y):
+    num = np.linalg.norm(x-y)
+    denom = np.linalg.norm(x)
+    return num/denom
 
 def nrmse(x, y):
     num = torch.norm(x-y, p=2)
