@@ -13,7 +13,7 @@ import copy
 from dotmap import DotMap
 import tqdm
 from utils import forward, adjoint, nrmse
-from sampling_funcs import marginal_ablation_sampler, StackedRandomGenerator, posterior_sampler
+from sampling_funcs import marginal_ablation_sampler, StackedRandomGenerator, posterior_sampler_edm, posterior_sampler_vanilla
 import re
 import click
 import tqdm
@@ -21,16 +21,18 @@ import pickle
 import PIL.Image
 import dnnlib
 from torch_utils import distributed as dist
+from skimage.metrics import structural_similarity as ssim
 # dist.init()
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=int, default=0)
-parser.add_argument('--l_ss', type=float, default=1)
+parser.add_argument('--l_ss', type=float, default=2)
 parser.add_argument('--S_noise', type=float, default=1)
 parser.add_argument('--sigma_max', type=float, default=1)
-parser.add_argument('--num_steps', type=int, default=750)
+parser.add_argument('--num_steps', type=int, default=300)
 parser.add_argument('--num_inner_steps', type=int, default=4)
+parser.add_argument('--ACS_perc', type=float, default=0.04)
 parser.add_argument('--R', type=int, default=4)
 parser.add_argument('--sample', type=int, default=0)
 parser.add_argument('--seed', type=int, default=0)
@@ -52,7 +54,7 @@ device=torch.device('cuda')
 
 
 # load sample 
-data_file = '/home/blevac/cond_score_data/fastMRI_knee/sample%d_R%d.pt'%(args.sample,args.R)
+data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/ACS_perc{args.ACS_perc}_R={args.R}/sample{args.sample}_R{args.R}.pt'
 contents = torch.load(data_file)
 # print(contents.keys())
 if args.contrast_recon == 'PD':
@@ -71,6 +73,9 @@ elif args.contrast_recon == 'PDFS':
     norm_c        = torch.tensor(contents['norm2']).cuda() # scalar
     class_idx = None
 
+print(torch.tensor(contents['norm1']))
+print(torch.tensor(contents['norm2']))
+
 print(s_maps.shape)
 # print(ksp.shape)
 # normalize
@@ -81,16 +86,16 @@ batch_size = 1
 
 # results_dir = '/csiNAS2/slow/brett/conformal_samples/results/DPS_marginal/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/R%d/sample%d/seed%d/'%(args.contrast_recon, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.R, args.sample, args.seed)
 
-results_dir = './results_ISMRM/DPS_marginal/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/R%d/sample%d/seed%d/'%(args.contrast_recon, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.R, args.sample, args.seed)
+results_dir = '/csiNAS2/slow/brett/multi-contrast_results_8_07_23/DPS_marginal/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/ACS_perc%.2f_R%d/sample%d/seed%d/'%(args.contrast_recon, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.ACS_perc, args.R, args.sample, args.seed)
 
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
 # load network
 if args.contrast_recon=='PD':
-    net_save = '/csiNAS2/slow/brett/edm_outputs/00021-PD_new-uncond-ddpmpp-edm-gpus3-batch15-fp32-PD/network-snapshot-001557.pkl'
+    net_save = '/csiNAS2/slow/brett/edm_outputs/00034-fastmri_PD_knee_preprocessed_7_21_23-uncond-ddpmpp-edm-gpus3-batch15-fp32-PD_knee_7_21_23/network-snapshot-010000.pkl'
 elif args.contrast_recon=='PDFS':
-    net_save = '/csiNAS2/slow/brett/edm_outputs/00023-PDFS_new-uncond-ddpmpp-edm-gpus3-batch15-fp32-PDFS/network-snapshot-001557.pkl'
+    net_save = '/csiNAS2/slow/brett/edm_outputs/00033-fastmri_PDFS_knee_preprocessed_7_21_23-uncond-ddpmpp-edm-gpus3-batch15-fp32-PDFS_knee_7_21_23/network-snapshot-010000.pkl'
 
 if dist.get_rank() != 0:
         torch.distributed.barrier()
@@ -120,19 +125,36 @@ if class_idx is not None:
 #                                         discretization=args.discretization, schedule=args.schedule,
 #                                         scaling=args.scaling, gt_img = gt_img)
 
-image_recon, img_stack = posterior_sampler(net=net, gt_img=gt_img, y=ksp, maps=s_maps, mask=mask, 
+# image_recon, img_stack = posterior_sampler_edm(net=net, gt_img=gt_img, y=ksp, maps=s_maps, mask=mask, 
+#                                 latents=latents, l_ss=args.l_ss, class_labels=None, 
+#                                 randn_like=torch.randn_like, num_steps=args.num_steps, sigma_min=0.002, 
+#                                 sigma_max=args.sigma_max, rho=7, S_churn=420, S_min=0, S_max=float('inf'), S_noise=args.S_noise)
+
+image_recon, img_stack = posterior_sampler_vanilla(net=net, gt_img=gt_img, y=ksp, maps=s_maps, mask=mask, 
                                 latents=latents, l_ss=args.l_ss, class_labels=None, 
                                 randn_like=torch.randn_like, num_steps=args.num_steps, sigma_min=0.002, 
                                 sigma_max=args.sigma_max, rho=7, S_churn=420, S_min=0, S_max=float('inf'), S_noise=args.S_noise)
 
 cplx_recon = torch.view_as_complex(image_recon.permute(0,-2,-1,1).contiguous())[None] #shape: [1,1,H,W]
+#unnormalize
+cplx_recon = cplx_recon*norm_c
+gt_img = gt_img*norm_c
+
+img_nrmse = nrmse(abs(gt_img), abs(cplx_recon)).item()
+
+cplx_recon=cplx_recon.detach().cpu().numpy()
+gt_img=gt_img.cpu().numpy()
+img_SSIM = ssim(abs(gt_img[0,0]), abs(cplx_recon[0,0]), data_range=abs(gt_img[0,0]).max() - abs(gt_img[0,0]).min())
 
 
-print('Sample %d, Seed %d, NRMSE: %.3f'%(args.sample,args.seed, nrmse(abs(gt_img), abs(cplx_recon)).item()))
+print('Sample %d, Seed %d, NRMSE: %.3f, SSIM: %.3f'%(args.sample,args.seed, img_nrmse, img_SSIM))
 
-dict = { 'gt_img': gt_img.cpu().numpy(),
-        'recon':cplx_recon.cpu().numpy(),
-        'img_stack': img_stack,
+dict = { 
+        # 'gt_img': gt_img.cpu().numpy(),
+        # 'recon':cplx_recon.cpu().numpy(),
+        # 'img_stack': img_stack,
+        'nrmse':img_nrmse,
+        'ssim': img_SSIM 
 }
 
 torch.save(dict, results_dir + '/checkpoint.pt')
