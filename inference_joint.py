@@ -14,7 +14,7 @@ from dotmap import DotMap
 import tqdm
 from utils import forward, adjoint, nrmse
 from utils import fft
-from sampling_funcs import marginal_ablation_sampler, StackedRandomGenerator, joint_posterior_sampler,  joint_posterior_sampler_vanilla
+from sampling_funcs import StackedRandomGenerator,  joint_posterior_sampler_vanilla
 import re
 import click
 import tqdm
@@ -42,6 +42,7 @@ parser.add_argument('--discretization', type=str, default='edm') # ['vp', 've', 
 parser.add_argument('--solver', type=str, default='euler') # ['euler', 'heun']
 parser.add_argument('--schedule', type=str, default='vp') # ['vp', 've', 'linear']
 parser.add_argument('--scaling', type=str, default='vp') # ['vp', 'none']
+parser.add_argument('--task', type=str, default='Recon') # ['Recon', 'SuperRes']
 
 args   = parser.parse_args()
 
@@ -54,8 +55,15 @@ device=torch.device('cuda')
 
 
 # load sample 
-data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/ACS_perc{args.ACS_perc}_R={args.R}/sample{args.sample}_R{args.R}.pt'
-contents = torch.load(data_file)
+if args.task == 'Recon':
+    data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/ACS_perc{args.ACS_perc}_R={args.R}/sample{args.sample}_R{args.R}.pt'
+    contents = torch.load(data_file)
+elif args.task == 'SuperRes':
+    data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/SuperRes_R={args.R}/sample{args.sample}_R{args.R}.pt'
+    contents = torch.load(data_file)
+elif args.task == 'Denoise':
+    data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/Denoise_std={0.05}/sample{args.sample}.pt'
+    contents = torch.load(data_file)
 
 
 # print(contents.keys())
@@ -96,7 +104,7 @@ print(torch.tensor(contents['norm2']))
 
 batch_size = 1
 
-results_dir = '/csiNAS2/slow/brett/multi-contrast_results_8_07_23/DPS_joint/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/ACS_perc%.2f_R%d/sample%d/seed%d/'%(args.conditioning, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.ACS_perc, args.R, args.sample, args.seed)
+results_dir = '/csiNAS2/slow/brett/multi-contrast_results_8_07_23/DPS_joint_%s/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/ACS_perc%.2f_R%d/sample%d/seed%d/'%(args.task,args.conditioning, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.ACS_perc, args.R, args.sample, args.seed)
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
@@ -123,13 +131,7 @@ if net.label_dim:
 if class_idx is not None:
     class_labels[:, :] = 0
     class_labels[:, class_idx] = 1
-
-
-# image_recon_1, image_recon_2 = joint_posterior_sampler(net=net, gt_img_1=gt_img_1, y_1=ksp_1, maps_1=s_maps_1, mask_1=mask_1, gt_img_2=gt_img_2, y_2=ksp_2, maps_2=s_maps_2, mask_2=mask_2, 
-#                                 latents=latents, l_ss=args.l_ss, class_labels=class_labels, 
-#                                 randn_like=torch.randn_like, num_steps=args.num_steps, sigma_min=0.002, 
-#                                 sigma_max=args.sigma_max, rho=7, S_churn=420, S_min=0, S_max=float('inf'), S_noise=args.S_noise)
-
+ 
 image_recon_1, image_recon_2 = joint_posterior_sampler_vanilla(net=net, gt_img_1=gt_img_1, y_1=ksp_1, maps_1=s_maps_1, mask_1=mask_1, gt_img_2=gt_img_2, y_2=ksp_2, maps_2=s_maps_2, mask_2=mask_2, 
                                 latents=latents, l_ss=args.l_ss, class_labels=class_labels, 
                                 randn_like=torch.randn_like, num_steps=args.num_steps, sigma_min=0.002, 
@@ -162,10 +164,10 @@ print('img1,  NRMSE: %.3f'%(img1_nrmse), ', SSIM: %.3f'%(img1_SSIM))
 print('img2,  NRMSE: %.3f'%(img2_nrmse), ', SSIM: %.3f'%(img2_SSIM))
 
 dict = { 
-        # 'gt_img_1': gt_img_1.detach().cpu().numpy(),
-        # 'recon_1':cplx_recon_1.detach().cpu().numpy(),
-        # 'gt_img_2': gt_img_2.detach().cpu().numpy(),
-        # 'recon_2':cplx_recon_2.detach().cpu().numpy(),
+        'gt_img_1': gt_img_1,
+        'recon_1':cplx_recon_1,
+        'gt_img_2': gt_img_2,
+        'recon_2':cplx_recon_2,
         'img1_nrmse': img1_nrmse,
         'img2_nrmse':img2_nrmse,
         'img1_ssim': img1_SSIM,

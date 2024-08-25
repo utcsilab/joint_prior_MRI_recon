@@ -13,7 +13,7 @@ import copy
 from dotmap import DotMap
 import tqdm
 from utils import forward, adjoint, nrmse
-from sampling_funcs import marginal_ablation_sampler, StackedRandomGenerator, posterior_sampler_edm, posterior_sampler_vanilla
+from sampling_funcs import StackedRandomGenerator, posterior_sampler_vanilla
 import re
 import click
 import tqdm
@@ -42,6 +42,7 @@ parser.add_argument('--discretization', type=str, default='edm') # ['vp', 've', 
 parser.add_argument('--solver', type=str, default='euler') # ['euler', 'heun']
 parser.add_argument('--schedule', type=str, default='vp') # ['vp', 've', 'linear']
 parser.add_argument('--scaling', type=str, default='vp') # ['vp', 'none']
+parser.add_argument('--task', type=str, default='Recon') # ['Recon', 'SuperRes']
 
 args   = parser.parse_args()
 
@@ -54,8 +55,15 @@ device=torch.device('cuda')
 
 
 # load sample 
-data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/ACS_perc{args.ACS_perc}_R={args.R}/sample{args.sample}_R{args.R}.pt'
-contents = torch.load(data_file)
+if args.task == 'Recon':
+    data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/ACS_perc{args.ACS_perc}_R={args.R}/sample{args.sample}_R{args.R}.pt'
+    contents = torch.load(data_file)
+elif args.task == 'SuperRes':
+    data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/SuperRes_R={args.R}/sample{args.sample}_R{args.R}.pt'
+    contents = torch.load(data_file)
+elif args.task == 'Denoise':
+    data_file = f'/csiNAS2/slow/brett/multicontrast_validation_data/fastMRI_knee/Denoise_std={0.05}/sample{args.sample}.pt'
+    contents = torch.load(data_file)
 # print(contents.keys())
 if args.contrast_recon == 'PD':
     s_maps          = torch.tensor(contents['maps_1']).cuda() # shape: [1,C,H,W]
@@ -86,7 +94,7 @@ batch_size = 1
 
 # results_dir = '/csiNAS2/slow/brett/conformal_samples/results/DPS_marginal/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/R%d/sample%d/seed%d/'%(args.contrast_recon, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.R, args.sample, args.seed)
 
-results_dir = '/csiNAS2/slow/brett/multi-contrast_results_8_07_23/DPS_marginal/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/ACS_perc%.2f_R%d/sample%d/seed%d/'%(args.contrast_recon, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.ACS_perc, args.R, args.sample, args.seed)
+results_dir = '/csiNAS2/slow/brett/multi-contrast_results_8_07_23/DPS_marginal_%s/%s/net-%s_step-%d_lss-%.1e_sigmaMax-%.1e/ACS_perc%.2f_R%d/sample%d/seed%d/'%(args.task, args.contrast_recon, args.net_arch, args.num_steps,  args.l_ss, args.sigma_max, args.ACS_perc, args.R, args.sample, args.seed)
 
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
@@ -150,8 +158,8 @@ img_SSIM = ssim(abs(gt_img[0,0]), abs(cplx_recon[0,0]), data_range=abs(gt_img[0,
 print('Sample %d, Seed %d, NRMSE: %.3f, SSIM: %.3f'%(args.sample,args.seed, img_nrmse, img_SSIM))
 
 dict = { 
-        # 'gt_img': gt_img.cpu().numpy(),
-        # 'recon':cplx_recon.cpu().numpy(),
+        'gt_img': gt_img,
+        'recon':cplx_recon,
         # 'img_stack': img_stack,
         'nrmse':img_nrmse,
         'ssim': img_SSIM 
